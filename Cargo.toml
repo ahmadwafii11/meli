@@ -1,0 +1,18 @@
+[package]
+name = "melilang"
+version = "0.1.0"
+edition = "2024"
+description = "MeliLang programming language compiler"
+license = "Apache-2.0"
+
+[lib]
+name = "melilang"
+path = "src/lib.rs"
+
+[[bin]]
+name = "meli"
+path = "src/main.rs"
+
+[dependencies]
+
+[dev-dependencies]
