@@ -1,0 +1,73 @@
+# ==========================================
+# 1. Rust & Cargo (Bawaan)
+# ==========================================
+# Folder hasil kompilasi (debug & release)
+/target/
+
+# File Cargo.lock
+# Catatan: Hapus tanda '#' di bawah jika proyek ini murni berupa Library (bukan CLI/binary)
+# Cargo.lock
+
+# File backup dari rustfmt / cargo fix
+**/*.rs.bk
+
+# Profiling & Debugging (perf, flamegraph, dSYM di macOS)
+perf.data
+perf.data.old
+flamegraph.svg
+*.dSYM/
+
+# ==========================================
+# 2. Compiler & Language Artifacts (Khusus Bahasa Anda)
+# ==========================================
+# Sesuaikan ekstensi di bawah dengan ekstensi file bahasa pemrograman Anda
+# Contoh jika bahasa Anda berekstensi .mylang atau menghasilkan bytecode/assembly:
+# *.mylang.out
+# *.bc
+# *.ll
+# *.s
+# *.o
+# *.wasm
+
+# Folder sementara untuk output hasil kompilasi atau test runner bahasa Anda
+/out/
+/build/
+/dist/
+*.out
+*.exe
+
+# ==========================================
+# 3. Parser Generator (Opsional - jika pakai)
+# ==========================================
+# Jika Anda menggunakan LALRPOP, Pest, atau ANTLR dan men-generate kode saat build
+# *.lalrpop.rs
+
+# ==========================================
+# 4. IDE, Editor & OS
+# ==========================================
+# Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# JetBrains (RustRover / CLion / IntelliJ)
+.idea/
+*.iml
+
+# Vim / Neovim
+*.swp
+*.swo
+*~
+
+# macOS & Windows
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ==========================================
+# 5. Environment & Logs
+# ==========================================
+.env
+*.log
