@@ -499,6 +499,21 @@ expression =
     logical_or_expression ;
 ```
 
+Urutan precedence dari tertinggi (Priority 1) ke terendah (Priority 8):
+
+| Priority | Production | Operators | Associativity |
+|---|---|---|---|
+| 1 | `postfix_expression`, `grouping_expression` | Function call, grouping | Left |
+| 2 | `unary_expression` | Unary `-`, `not` | Prefix |
+| 3 | `multiplicative_expression` | `*`, `/`, `%`, `@` | Left |
+| 4 | `additive_expression` | `+`, `-` | Left |
+| 5 | `range_expression` | `..` | Non-associative |
+| 6 | `comparison_expression` | Comparison operators | Non-associative |
+| 7 | `logical_and_expression` | `and` | Left |
+| 8 | `logical_or_expression` | `or` | Left |
+
+Tabel ini identik dengan tabel precedence pada AST Structure v0.1.0 (Bagian 10).
+
 ### 5.2. Logical OR
 
 ```ebnf
@@ -523,8 +538,8 @@ Operator `and` memiliki precedence lebih tinggi daripada `or`.
 
 ```ebnf
 comparison_expression =
-    additive_expression,
-    [ comparison_operator, additive_expression ] ;
+    range_expression,
+    [ comparison_operator, range_expression ] ;
 ```
 
 Grammar hanya memperbolehkan satu comparison operator pada satu comparison expression.
@@ -659,7 +674,7 @@ Validasi operand matrix dilakukan pada tahap type checking.
 ```ebnf
 unary_expression =
       unary_operator, unary_expression
-    | range_expression ;
+    | postfix_expression ;
 
 unary_operator =
       Minus
@@ -675,27 +690,64 @@ let enabled be not false
 
 Unary operators menggunakan right-to-left nesting melalui recursive grammar.
 
+**Aturan `not` terhadap operator perbandingan.** Operator `not` memiliki precedence lebih tinggi daripada operator perbandingan. Akibatnya, `not` hanya berlaku pada operand terdekat:
+
+```meli
+not x is equal to y
+```
+
+dibaca sebagai:
+
+```meli
+(not x) is equal to y
+```
+
+Untuk meniadakan hasil perbandingan, pengguna harus menuliskan tanda kurung secara eksplisit:
+
+```meli
+not (x is equal to y)
+```
+
+Untuk kasus ketidaksamaan, gunakan operator `is not equal to`:
+
+```meli
+x is not equal to y
+```
+
+Parser tidak menebak maksud pengguna. Apakah `(not x) is equal to y` valid secara tipe merupakan persoalan type checking.
+
 ### 5.8. Range Expression
 
 ```ebnf
 range_expression =
-    postfix_expression,
-    [ Range, postfix_expression ] ;
+    additive_expression,
+    [ Range, additive_expression ] ;
 ```
 
 Contoh:
 
 ```meli
 let epochs be 0..100
+let last_index be 0..count - 1
+let shifted be start + 1..end * 2
 ```
 
 Operator `..` menghasilkan `RangeExpression`.
 
+Range memiliki precedence **lebih rendah** daripada operator aritmetika dan **lebih tinggi** daripada operator perbandingan. Akibatnya, batas range dapat berupa ekspresi aritmetika tanpa tanda kurung:
+
+| Source | Interpretasi |
+|---|---|
+| `0..count - 1` | `0..(count - 1)` |
+| `start + 1..end * 2` | `(start + 1)..(end * 2)` |
+| `-5..5` | `(-5)..5` |
+| `f(1)..f(2)` | `f(1)..f(2)` |
+
 Ketentuan:
 
 - Range memiliki batas akhir eksklusif.
-- Range tidak dapat dirangkai secara langsung.
-- Kedua batas harus berupa expression yang valid.
+- Range tidak dapat dirangkai secara langsung. `1..5..10` ditolak sebagai syntax error.
+- Kedua batas harus berupa `additive_expression` yang valid. Batas berupa perbandingan, `and`, atau `or` harus dikelompokkan dengan tanda kurung.
 - Validasi kesesuaian tipe batas dilakukan pada semantic analysis.
 
 ### 5.9. Postfix Expression
@@ -827,8 +879,7 @@ Grammar:
 ```ebnf
 type_expression =
       named_type
-    | generic_type
-    | array_type ;
+    | generic_type ;
 
 named_type =
     Identifier ;
@@ -846,15 +897,6 @@ type_argument_list =
 type_argument =
       type_expression
     | IntegerLiteral ;
-
-array_type =
-    Array,
-    LeftBracket,
-    type_expression,
-    Comma,
-    IntegerLiteral,
-    { Comma, IntegerLiteral },
-    RightBracket ;
 ```
 
 Contoh:
@@ -882,10 +924,11 @@ Ketentuan:
 - Named type menggunakan identifier.
 - Generic type menggunakan tanda kurung siku.
 - Generic type dapat menerima type argument dan integer dimension.
-- Array type dapat menerima tipe elemen dan dimensi.
-- Validitas nama tipe dan jumlah argumen diperiksa oleh type checker.
+- `Array`, `List`, `Option`, `Result`, dan `Tensor` bukan keyword. Semuanya adalah `Identifier` biasa dan dikenali sebagai `generic_type` ketika diikuti tanda kurung siku. Tidak ada production khusus untuk array.
+- Validitas nama tipe, jumlah argumen, dan jenis argumen (tipe atau dimensi integer) diperiksa oleh type checker. Contohnya, `Array[f32, 224, 224]` valid secara sintaks, sedangkan apakah `Array` menerima dua dimensi ditentukan oleh type checker.
+- Type annotation selalu ditulis dengan tanda titik dua setelah nama, misalnya `let epochs: i32 be 100`. Keyword `as` tidak digunakan untuk type annotation.
 
-Catatan implementasi: AST TypeExpression perlu mendukung integer generic arguments agar `Tensor[f32, 224, 224, 3]` dapat direpresentasikan secara benar. Detail penyesuaian AST dijelaskan pada bagian 12.
+Catatan implementasi: AST TypeExpression menggunakan `TypeArgument` agar integer dimension pada `Tensor[f32, 224, 224, 3]` dapat direpresentasikan. Detailnya dijelaskan pada AST Structure Bagian 6.
 
 ---
 

@@ -115,8 +115,8 @@ Contoh pemetaan:
 |---|---|---|
 | `is equal to` | `Is`, `Equal`, `To` | `Equal` |
 | `is not equal to` | `Is`, `Not`, `Equal`, `To` | `NotEqual` |
-| `is greater than` | `Is`, `Greater`, `Than` | `GreaterThan` |
-| `is less than` | `Is`, `Less`, `Than` | `LessThan` |
+| `is greater than` | `Is`, `Greater`, `Than` | `Greater` |
+| `is less than` | `Is`, `Less`, `Than` | `Less` |
 | `is at least` | `Is`, `At`, `Least` | `GreaterEqual` |
 | `is at most` | `Is`, `At`, `Most` | `LessEqual` |
 
@@ -195,7 +195,27 @@ MeliLang menyediakan literal numerik untuk integer dan floating-point.
 | Integer | `100` |
 | Decimal | `0.001` |
 | Floating-point | `3.14159` |
-| Scientific notation | `1.5e-4` |
+| Scientific notation | `1.5e-4`, `1e5`, `2E+3` |
+
+Bentuk formal literal numerik (hanya digit ASCII `0-9`):
+
+```ebnf
+digits         = digit, { digit } ;
+integer        = digits ;
+decimal        = digits, ".", digits ;
+exponent       = ( "e" | "E" ), [ "+" | "-" ], digits ;
+float_literal  = decimal, [ exponent ]
+               | integer, exponent ;
+```
+
+Aturan klasifikasi token:
+
+- Literal tanpa titik desimal dan tanpa exponent menjadi `IntegerLiteral`.
+- Literal dengan titik desimal atau exponent menjadi `FloatLiteral`. Akibatnya `1e5` adalah `FloatLiteral`, bukan `IntegerLiteral`.
+- Huruf exponent boleh `e` atau `E`.
+- Angka nol di depan diperbolehkan (`007` adalah `IntegerLiteral`).
+- Lexeme menyimpan teks asli, misalnya `"0.90"`. Konversi ke `i64` atau `f64` dilakukan oleh Parser, bukan Lexer.
+- Lexer tidak memeriksa rentang nilai. Integer yang terlalu besar untuk `i64` dilaporkan oleh Parser saat konversi.
 
 Token kinds:
 
@@ -224,6 +244,44 @@ IntegerLiteral("10")
 
 Lexer harus menolak format numerik yang tidak valid, misalnya `1.2.3` atau `1e`.
 
+Tanda titik dianggap bagian dari literal desimal hanya jika langsung diikuti digit. Karena itu `..` setelah angka tidak boleh dibaca sebagai titik desimal:
+
+```meli
+repeat for each epoch in 0..100:
+```
+
+Token sequence bagian range:
+
+```text
+IntegerLiteral("0")
+Range
+IntegerLiteral("100")
+```
+
+Contoh lain:
+
+| Source | Token Sequence |
+|---|---|
+| `0..100` | `IntegerLiteral("0")`, `Range`, `IntegerLiteral("100")` |
+| `0.5..1.5` | `FloatLiteral("0.5")`, `Range`, `FloatLiteral("1.5")` |
+| `1.5e-4` | `FloatLiteral("1.5e-4")` |
+| `-10` | `Minus`, `IntegerLiteral("10")` |
+| `1.` | Lexical error (`InvalidNumber`): titik desimal tanpa digit sesudahnya |
+| `1.2.3` | Lexical error (`InvalidNumber`): titik desimal kedua |
+| `1.e5` | Lexical error (`InvalidNumber`): titik desimal tanpa digit sebelum exponent |
+| `1e`, `1e+`, `1.5e-` | Lexical error (`InvalidNumber`): exponent tanpa digit |
+| `1e5.5` | Lexical error (`InvalidNumber`): titik desimal setelah exponent |
+| `123epoch`, `10x` | Lexical error (`InvalidNumber`): huruf langsung mengikuti angka |
+| `0x10`, `0b101` | Lexical error (`InvalidNumber`): format hex dan biner belum didukung |
+| `1_000` | Lexical error (`InvalidNumber`): pemisah underscore belum didukung |
+
+Aturan tambahan:
+
+- Angka harus berupa digit ASCII. Digit Unicode lain (misalnya `٣`) menghasilkan error `UnexpectedCharacter`.
+- Tanda `-` dan `+` di dalam exponent (`1.5e-4`) adalah bagian dari literal. Tanda di luar exponent adalah token `Minus` atau `Plus`.
+- Titik desimal kedua hanya menjadi error jika langsung diikuti digit. `1.5.abs` dibaca `FloatLiteral`, `Dot`, `Identifier`, dan penolakannya menjadi tugas Parser.
+- Saat angka tidak valid, Lexer menghabiskan seluruh sisa literal yang salah (huruf, digit, underscore, dan titik yang diikuti digit). Span error mencakup seluruh literal dan Lexer tidak melaporkan error kedua untuk teks yang sama.
+
 ### 3.6. String and Character Literals
 
 String literal menggunakan tanda kutip ganda.
@@ -245,7 +303,7 @@ StringLiteral
 CharLiteral
 ```
 
-Escape sequences yang direncanakan:
+Escape sequences yang didukung pada v0.1.0:
 
 | Sequence | Meaning |
 |---|---|
@@ -257,7 +315,56 @@ Escape sequences yang direncanakan:
 | `\'` | Single quotation mark |
 | `\0` | Null character |
 
-Lexer harus menghasilkan error apabila string atau character literal tidak ditutup dengan benar.
+Escape lain, termasuk `\x41` dan `\u{1F9E1}`, belum didukung dan menghasilkan error `InvalidEscapeSequence`.
+
+Bentuk formal:
+
+```ebnf
+string_literal = '"', { string_char | escape }, '"' ;
+char_literal   = "'", ( char_char | escape ), "'" ;
+escape         = "\", ( "n" | "t" | "r" | "\" | '"' | "'" | "0" ) ;
+string_char    = (* any Unicode scalar value except '"', "\", newline, carriage return *) ;
+char_char      = (* any Unicode scalar value except "'", "\", newline, carriage return *) ;
+```
+
+Aturan:
+
+- String dan character literal ditulis dalam satu baris. Newline atau akhir file sebelum tanda kutip penutup menghasilkan error. Multiline string belum didukung.
+- Isi literal boleh berisi karakter Unicode apa pun (`"é🧡 日本語"`, `'🧡'`) dan tab. Tanda `#`, kata kunci, dan operator di dalam literal bukan komentar, keyword, maupun operator.
+- Tanda kutip tunggal tidak perlu di-escape di dalam string (`"it's"`), dan tanda kutip ganda tidak perlu di-escape di dalam character (`'"'`).
+- Satu escape sequence dihitung sebagai satu karakter, sehingga `'\n'` valid dan `'\n\t'` tidak valid.
+- Backslash di akhir baris tidak melanjutkan literal ke baris berikutnya. Literal tersebut dianggap tidak ditutup.
+- Tanda kutip tunggal sebagai character harus di-escape: gunakan `'\''`, bukan `'''`.
+- Kutip tipografis (`“ ” ‘ ’`) bukan delimiter dan menghasilkan error `UnexpectedCharacter`.
+
+Lexeme token adalah teks asli, termasuk tanda kutip dan tanpa decoding escape. Contohnya, source `"a\nb"` menghasilkan lexeme `"a\nb"` sepanjang 6 karakter. Lexer hanya memvalidasi escape. Parser yang mengubahnya menjadi nilai `Literal::String` atau `Literal::Char` pada AST. Dengan begitu, span dan lexeme selalu cocok dengan source.
+
+Contoh token:
+
+| Source | Token |
+|---|---|
+| `"Hello"` | `StringLiteral("\"Hello\"")` |
+| `""` | `StringLiteral("\"\"")` |
+| `'M'` | `CharLiteral("'M'")` |
+| `'\n'` | `CharLiteral("'\\n'")` |
+| `"a""b"` | `StringLiteral`, `StringLiteral` |
+
+Error pada string dan character literal:
+
+| Source | Error | Span error |
+|---|---|---|
+| `"Hello MeliLang` | `UnterminatedString` | Dari tanda kutip pembuka sampai akhir baris |
+| `'M` | `UnterminatedCharacter` | Dari tanda kutip pembuka sampai akhir baris |
+| `'\'` | `UnterminatedCharacter` | Seluruh teks, karena kutip penutup sudah menjadi escape |
+| `''` | `InvalidCharacterLiteral` | Seluruh literal |
+| `'AB'` | `InvalidCharacterLiteral` | Seluruh literal |
+| `"\x"` | `InvalidEscapeSequence { sequence: "\\x" }` | Hanya escape-nya (backslash dan karakter sesudahnya) |
+
+Pemulihan error:
+
+- Apa pun errornya, Lexer menghabiskan sisa literal sampai tanda kutip penutup atau akhir baris. Satu literal yang salah menghasilkan tepat satu error, dan Lexer dapat melanjutkan ke token berikutnya.
+- Jika satu literal memiliki lebih dari satu masalah, error yang muncul paling awal di source yang dilaporkan. Contohnya `"\x41\y"` hanya melaporkan `\x`, dan `"\x abc` (tanpa kutip penutup) melaporkan `InvalidEscapeSequence`, bukan `UnterminatedString`.
+- Literal yang tidak ditutup berhenti sebelum newline, sehingga token `Newline` tetap dihasilkan dan baris berikutnya diproses normal.
 
 ### 3.7. Boolean Literals
 
@@ -480,6 +587,7 @@ Lexer mengikuti aturan berikut:
 10. Setiap token memiliki source span.
 11. Lexer menghasilkan lexical error untuk karakter atau literal yang tidak valid.
 12. Keyword `at` dan simbol `@` harus menghasilkan token yang berbeda.
+13. Setelah digit, tanda `.` hanya menjadi bagian literal angka jika langsung diikuti digit. Urutan `..` selalu menghasilkan token `Range`.
 
 ## 6. TokenKind Definition
 
@@ -575,7 +683,7 @@ pub enum TokenKind {
 }
 ```
 
-`EqualEqual`, `NotEqual`, `GreaterThan`, `LessThan`, `GreaterEqual`, dan `LessEqual` merupakan representasi operator pada tahap AST/Parser. Token stream Lexer tetap berisi kata-kata pembentuk operator secara individual.
+`EqualEqual`, `NotEqual`, `GreaterThan`, `LessThan`, `GreaterEqual`, dan `LessEqual` merupakan nama cadangan untuk representasi operator pada tahap Parser. Lexer tidak pernah menghasilkan token tersebut, dan nama operator pada AST ditentukan oleh `BinaryOperator` di AST Structure (`Equal`, `NotEqual`, `Greater`, `Less`, `GreaterEqual`, `LessEqual`). Token stream Lexer tetap berisi kata-kata pembentuk operator secara individual.
 
 ## 7. Lexer Error Handling
 
@@ -587,10 +695,11 @@ Contoh:
 |---|---|
 | Invalid character | `let value be $100` |
 | Unterminated string | `"Hello MeliLang` |
-| Invalid character literal | `'AB'` |
-| Invalid number | `1.2.3` |
+| Unterminated character | `'M` |
+| Invalid character literal | `'AB'`, `''` |
+| Invalid number | `1.2.3`, `1.`, `1e`, `123epoch` |
 | Invalid indentation | Indentation kembali ke tingkat yang tidak pernah digunakan |
-| Invalid character escape | `"\x"` jika escape tersebut tidak didukung |
+| Invalid escape sequence | `"\x"`, `'\q'`, atau escape lain yang tidak didukung |
 
 Setiap error harus menyertakan lokasi baris dan kolom.
 

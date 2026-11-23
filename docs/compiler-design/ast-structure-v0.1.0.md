@@ -535,6 +535,8 @@ pub enum UnaryOperator {
 }
 ```
 
+`not` mengikat lebih kuat daripada operator perbandingan. Source `not x is equal to y` menghasilkan `BinaryExpression(Unary(Not, x), Equal, y)`. Untuk meniadakan hasil perbandingan, pengguna menulis `not (x is equal to y)`, yang menghasilkan `Unary(Not, Grouping(BinaryExpression(x, Equal, y)))`.
+
 ### 5.5. Binary Expression
 
 Digunakan untuk operasi terhadap dua operand.
@@ -677,7 +679,30 @@ pub struct RangeExpression {
 }
 ```
 
-Operator `..` pada rancangan awal merepresentasikan range dengan batas akhir eksklusif.
+Operator `..` pada rancangan awal merepresentasikan range dengan batas akhir eksklusif, sehingga Parser mengisi `inclusive: false`.
+
+Batas `start` dan `end` dapat berupa ekspresi aritmetika tanpa tanda kurung karena `..` memiliki precedence lebih rendah daripada `+`, `-`, `*`, `/`, `%`, dan `@`.
+
+Contoh:
+
+```meli
+repeat for each i in 0..count - 1:
+    show i
+```
+
+Pada contoh tersebut, `iterable` pada `ForLoop` adalah:
+
+```text
+RangeExpression
+├── start: Literal(Integer(0))
+├── end: BinaryExpression
+│   ├── left: Identifier("count")
+│   ├── operator: Subtract
+│   └── right: Literal(Integer(1))
+└── inclusive: false
+```
+
+Range tidak dapat dirangkai (`1..5..10` ditolak sebagai syntax error). Batas berupa perbandingan atau operator logika harus dikelompokkan dengan tanda kurung.
 
 ### 5.9. Array Expression
 
@@ -712,15 +737,17 @@ pub enum TypeExpression {
 
     Generic {
         name: String,
-        arguments: Vec<TypeExpression>,
-    },
-
-    Array {
-        element_type: Box<TypeExpression>,
-        dimensions: Vec<usize>,
+        arguments: Vec<TypeArgument>,
     },
 }
+
+pub enum TypeArgument {
+    Type(TypeExpression),
+    Integer(usize),
+}
 ```
+
+`TypeArgument` memungkinkan argumen generic berupa tipe maupun dimensi integer. Tidak ada varian `Array` khusus: `Array` adalah nama generic biasa, sama seperti `List`, `Option`, `Result`, dan `Tensor`.
 
 Contoh tipe yang direncanakan:
 
@@ -730,7 +757,21 @@ f32
 String
 List[i32]
 Option[f32]
+Result[String, i32]
+Array[f32, 224, 224]
 Tensor[f32, 224, 224, 3]
+```
+
+Contoh representasi `Tensor[f32, 224, 224, 3]`:
+
+```text
+Generic
+├── name: "Tensor"
+└── arguments
+    ├── Type(Named("f32"))
+    ├── Integer(224)
+    ├── Integer(224)
+    └── Integer(3)
 ```
 
 Contoh penggunaannya dalam deklarasi:
@@ -892,7 +933,7 @@ Parser MeliLang bertanggung jawab untuk:
 
 Untuk expression parsing, pendekatan **Pratt Parser** direkomendasikan karena mendukung pengaturan operator precedence secara eksplisit dan relatif mudah dikembangkan.
 
-Rancangan precedence awal:
+Rancangan precedence (Priority 1 = terikat paling kuat). Tabel ini harus identik dengan Formal Syntax Design Bagian 5.1:
 
 | Priority | Operators | Associativity |
 |---|---|---|
