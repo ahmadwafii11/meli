@@ -16,6 +16,12 @@ fn lex(source: &str) -> Vec<(TokenKind, String)> {
             break;
         }
 
+        // The Newline that closes a last line without a line break has an empty
+        // lexeme. These tests are not about it; indentation_test.rs covers it.
+        if token.kind == TokenKind::Newline && token.lexeme.is_empty() {
+            continue;
+        }
+
         tokens.push((token.kind, token.lexeme));
     }
 
@@ -429,6 +435,7 @@ fn test_number_position_on_second_line() {
 
     assert_eq!(lexer.next_token().unwrap().kind, TokenKind::Identifier);
     assert_eq!(lexer.next_token().unwrap().kind, TokenKind::Newline);
+    assert_eq!(lexer.next_token().unwrap().kind, TokenKind::Indent); // The two leading spaces on line 2 open an indentation level.
 
     let number = lexer.next_token().unwrap();
 
@@ -558,6 +565,8 @@ fn test_lexer_recovers_after_invalid_number() {
 
     assert_eq!(lexer.next_token().unwrap().kind, TokenKind::Plus);
     assert_eq!(lexer.next_token().unwrap().kind, TokenKind::IntegerLiteral);
+
+    assert_eq!(lexer.next_token().unwrap().kind, TokenKind::Newline);// A last line without a line break is closed by a synthetic Newline.
     assert_eq!(lexer.next_token().unwrap().kind, TokenKind::Eof);
 }
 
