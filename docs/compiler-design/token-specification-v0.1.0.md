@@ -495,12 +495,12 @@ Aturan structural tokens:
 
 1. Setiap logical statement wajib diakhiri newline.
 2. Header conditional, function, dan loop diakhiri colon dan newline sebelum block.
-3. Satu block menggunakan tingkat indentation yang konsisten.
-4. Tab dan spasi tidak boleh dicampur dalam satu file.
-5. Blank lines tidak menghasilkan `Indent` atau `Dedent`.
-6. Komentar tidak memengaruhi struktur indentation.
-7. Dedent harus kembali ke tingkat indentation sebelumnya yang valid.
-8. Akhir file harus menghasilkan seluruh `Dedent` yang masih terbuka sebelum `Eof`.
+3. Satu block menggunakan tingkat indentation yang konsisten. Lebar indentation tidak ditetapkan (2 spasi, 4 spasi, atau satu tab sama-sama valid), dan setiap level boleh memakai lebar yang berbeda.
+4. Tab dan spasi tidak boleh dicampur dalam satu file. Karakter indentation ditetapkan oleh baris berindentasi pertama di file.
+5. Baris kosong (kosong atau hanya berisi spasi dan tab) tidak menghasilkan token apa pun: bukan `Newline`, `Indent`, maupun `Dedent`.
+6. Baris yang hanya berisi komentar diperlakukan sama seperti baris kosong. Komentar tidak memengaruhi struktur indentation.
+7. Dedent harus kembali ke tingkat indentation yang pernah dibuka. Jika tidak, Lexer menghasilkan `InvalidIndentation`.
+8. Akhir file harus menghasilkan `Newline` sintetis (jika baris terakhir berisi kode tanpa line break) dan seluruh `Dedent` yang masih terbuka sebelum `Eof`.
 9. Implicit statement termination tidak didukung.
 10. Implicit line continuation di luar aturan grammar yang secara eksplisit ditetapkan belum didukung pada v0.1.0.
 
@@ -510,6 +510,117 @@ Untuk menjaga aturan newline wajib tetap sederhana, deklarasi fungsi dengan para
 define function calculate_accuracy(correct: i32, total: i32) returns f32:
     return correct / total
 ```
+
+#### 3.11.1. Indentation Algorithm
+
+Indentation diperiksa hanya pada awal baris yang berisi kode. Lexer menyimpan tumpukan level indentation yang selalu dimulai dari `0`. Lebar sebuah baris adalah jumlah karakter spasi atau tab di awal baris. Karena tab dan spasi tidak boleh dicampur, tidak diperlukan konversi lebar tab.
+
+| Lebar baris dibanding level teratas | Hasil |
+|---|---|
+| Lebih besar | Level baru ditambahkan ke tumpukan dan satu `Indent` dihasilkan |
+| Sama | Tidak ada token indentation |
+| Lebih kecil | Level dikeluarkan dari tumpukan sampai level teratas tidak lebih besar dari lebar baris, dengan satu `Dedent` untuk setiap level yang dikeluarkan. Jika level teratas tidak sama dengan lebar baris, terjadi `InvalidIndentation` |
+
+Contoh dengan level `0`, `4`, `8`:
+
+```meli
+when a:
+    when b:
+        show c
+    show d
+show e
+```
+
+Token pada pergantian baris:
+
+```text
+... Show Identifier("c") Newline
+Dedent                           (8 -> 4)
+Show Identifier("d") Newline
+Dedent                           (4 -> 0)
+Show Identifier("e") Newline
+```
+
+Baris kode dengan lebar 6 pada contoh di atas adalah `InvalidIndentation`, karena tidak ada level 6 di tumpukan. Lebar yang lebih besar dari level teratas selalu membuka level baru. Lexer tidak membatasi selisihnya.
+
+Urutan token pada pergantian baris adalah `Newline`, lalu `Dedent` (nol atau lebih) atau `Indent` (nol atau satu), lalu token pertama pada baris tersebut.
+
+#### 3.11.2. Structural Token Details
+
+| Token | Lexeme | Span |
+|---|---|---|
+| `Newline` | Line break asli: `\n`, `\r\n`, atau `\r` | Line break itu |
+| `Newline` sintetis | Kosong | Kosong, di akhir source |
+| `Indent` | Spasi atau tab di awal baris | Seluruh indentation baris |
+| `Dedent` | Kosong | Kosong, pada token pertama baris tersebut |
+| `Dedent` di akhir source | Kosong | Kosong, di akhir source |
+
+Hanya baris yang berisi kode yang menghasilkan `Newline`. Dengan aturan ini, baris kosong di antara statement tidak menambah token apa pun, sehingga token stream pada contoh Bagian 3.11 sama persis dengan yang tertulis di sana.
+
+Pembedaan `Newline` asli dan sintetis dapat dilakukan lewat lexeme: yang sintetis berlexeme kosong.
+
+#### 3.11.3. Blank Lines and Comment-Only Lines
+
+Baris kosong, baris yang hanya berisi spasi dan tab, serta baris yang hanya berisi komentar dilewati sepenuhnya. Lebar indentation-nya tidak membuka atau menutup level, dan karakter indentation-nya tidak diperiksa untuk pencampuran tab dan spasi. Dengan demikian, komentar dapat ditulis pada kolom mana pun tanpa memengaruhi struktur program.
+
+```meli
+when ready:
+    show "a"
+# komentar di kolom 0 tidak menutup block
+        # komentar yang lebih dalam tidak membuka block
+    show "b"
+```
+
+Komentar di akhir baris kode tidak memengaruhi `Newline` yang menutup baris tersebut.
+
+#### 3.11.4. Newline at the End of the Source
+
+Jika baris terakhir berisi kode tetapi tidak diakhiri line break, Lexer menghasilkan `Newline` sintetis sebelum `Dedent` dan `Eof`, sehingga aturan "setiap logical statement diakhiri `Newline`" tetap berlaku.
+
+| Source | Token |
+|---|---|
+| `let x be 1` | `Let`, `Identifier`, `Be`, `IntegerLiteral`, `Newline` (sintetis) |
+| `let x be 1\n` | `Let`, `Identifier`, `Be`, `IntegerLiteral`, `Newline` |
+| `a:\n    b` | `Identifier`, `Colon`, `Newline`, `Indent`, `Identifier`, `Newline` (sintetis), `Dedent` |
+| `a\n   ` | `Identifier`, `Newline` (baris terakhir hanya spasi, tidak ada `Newline` sintetis) |
+| `# komentar` atau source kosong | Tidak ada token selain `Eof` |
+
+`Eof` tetap dihasilkan pada pemanggilan berikutnya setelah source habis.
+
+#### 3.11.5. Mixed Indentation
+
+Karakter indentation file (spasi atau tab) ditetapkan oleh baris berkode pertama yang berindentasi. Baris berkode setelahnya menghasilkan `MixedIndentation` jika:
+
+- indentation-nya mencampur tab dan spasi, atau
+- indentation-nya memakai karakter yang berbeda dari karakter file.
+
+Baris tanpa indentation tidak pernah menyebabkan error ini. Tab dan spasi di tengah baris (di antara token) bukan indentation dan tidak diperiksa.
+
+Contoh:
+
+| Source | Hasil |
+|---|---|
+| `a:\n    b\n\tc` | `MixedIndentation` pada baris 3 |
+| `a:\n\tb\n    c` | `MixedIndentation` pada baris 3 |
+| `a:\n \tb` | `MixedIndentation` pada baris 2 (campuran dalam satu baris) |
+| `a:\n\tb\nc:\n    d` | `MixedIndentation` pada baris 4 (aturan berlaku untuk seluruh file) |
+| `a:\n    b\twith\ttabs` | Valid |
+
+#### 3.11.6. Layout Responsibilities
+
+Lexer hanya melaporkan tata letak indentation. Lexer tidak mengetahui apakah sebuah `Indent` diperbolehkan pada posisi tertentu, karena itu bergantung pada grammar:
+
+- `Indent` tanpa header block sebelumnya, misalnya `let x be 1` diikuti baris berindentasi, atau baris pertama file yang berindentasi, tetap menghasilkan `Indent`. Parser melaporkannya sebagai syntax error.
+- Line break di dalam tanda kurung tetap mengakhiri logical line (aturan 10). Contohnya `f(\n    1\n)` menghasilkan `Newline`, `Indent`, dan `Dedent` di dalam pemanggilan. Parser menolak urutan tersebut.
+
+#### 3.11.7. Error Recovery
+
+| Error | Span | Perilaku sesudah error |
+|---|---|---|
+| `MixedIndentation` | Seluruh indentation baris | Baris dibiarkan pada level saat ini (tanpa `Indent` atau `Dedent`), lalu token baris tersebut dihasilkan seperti biasa |
+| `InvalidIndentation` | Seluruh indentation baris | `Dedent` untuk level yang sudah ditutup dihasilkan lebih dulu, lalu error. Baris dianggap berada pada level valid terdekat yang lebih rendah, dan tidak ada level baru yang dibuka untuk lebar tersebut |
+
+Pada kedua kasus, Lexer tetap berjalan sampai `Eof` dan menutup semua level yang masih terbuka.
 
 ### 3.12. Comments
 
@@ -577,8 +688,8 @@ Lexer mengikuti aturan berikut:
 
 1. Source code dibaca secara berurutan.
 2. Whitespace biasa memisahkan token, tetapi tidak menghasilkan token tersendiri.
-3. Newline diproses sebagai pemisah logical statement.
-4. Indentation diproses untuk menghasilkan `Indent` dan `Dedent`.
+3. Newline diproses sebagai pemisah logical statement. Hanya baris yang berisi kode yang menghasilkan `Newline`.
+4. Indentation pada awal baris yang berisi kode diproses untuk menghasilkan `Indent` dan `Dedent`.
 5. Reserved keywords dikenali sebelum identifier ditetapkan.
 6. Operator multi-character seperti `->` dan `..` dikenali sebelum operator yang lebih pendek.
 7. Kata-kata pembentuk controlled natural-language operator dikenali sebagai token individual.
@@ -588,6 +699,9 @@ Lexer mengikuti aturan berikut:
 11. Lexer menghasilkan lexical error untuk karakter atau literal yang tidak valid.
 12. Keyword `at` dan simbol `@` harus menghasilkan token yang berbeda.
 13. Setelah digit, tanda `.` hanya menjadi bagian literal angka jika langsung diikuti digit. Urutan `..` selalu menghasilkan token `Range`.
+14. Baris kosong dan baris yang hanya berisi komentar tidak menghasilkan token dan tidak diperiksa indentation-nya.
+15. Tab dan spasi tidak boleh dicampur dalam indentation satu file.
+16. Pada akhir source, Lexer menghasilkan `Newline` sintetis (jika baris terakhir berisi kode tanpa line break), `Dedent` untuk setiap level yang masih terbuka, lalu `Eof`.
 
 ## 6. TokenKind Definition
 
@@ -699,6 +813,7 @@ Contoh:
 | Invalid character literal | `'AB'`, `''` |
 | Invalid number | `1.2.3`, `1.`, `1e`, `123epoch` |
 | Invalid indentation | Indentation kembali ke tingkat yang tidak pernah digunakan |
+| Mixed indentation | Tab dan spasi dicampur dalam indentation, atau berbeda dari karakter indentation file |
 | Invalid escape sequence | `"\x"`, `'\q'`, atau escape lain yang tidak didukung |
 
 Setiap error harus menyertakan lokasi baris dan kolom.
