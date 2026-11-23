@@ -9,10 +9,11 @@ use crate::lexer::span::{Position, Span};
 // Converts MeliLang source code into a token stream
 pub struct Lexer<'src> {
     cursor: Cursor<'src>,
-    pending_tokens: VecDeque<Token>, // Pending tokens, especially INDENT and DEDENT
-    indentation_stack: Vec<usize>,   // Tracks indentation levels
-    at_line_start: bool,             // Tracks whether the current logical line has code
-    eof_emitted: bool,               // Prevents repeated EOF token generation if needed
+    pending: VecDeque<Result<Token, LexerError>>, // Queued results returned before scanning anything new. Holds Indent, Dedent, the synthetic end-of-file Newline, and indentation errors, in source order.
+    indentation_stack: Vec<usize>,                // Open indentation levels; always starts with 0
+    indent_char: Option<char>, // ' ' or '\t', fixed by the first indented line of the file
+    at_line_start: bool,       // True until the current line produces its first token
+    eof_emitted: bool,         // Makes Eof stable once it has been reached
 }
 
 impl<'src> Lexer<'src> {
@@ -20,8 +21,9 @@ impl<'src> Lexer<'src> {
     pub fn new(source: &'src str) -> Self {
         Self {
             cursor: Cursor::new(source),
-            pending_tokens: VecDeque::new(),
+            pending: VecDeque::new(),
             indentation_stack: vec![0],
+            indent_char: None,
             at_line_start: true,
             eof_emitted: false,
         }
@@ -55,8 +57,8 @@ impl<'src> Lexer<'src> {
     // Produces the next token or a lexical error
     pub fn next_token(&mut self) -> Result<Token, LexerError> {
         // Return pending tokens first.
-        if let Some(token) = self.pending_tokens.pop_front() {
-            return Ok(token);
+        if let Some(item) = self.pending.pop_front() {
+            return item;
         }
 
         // EOF is stable after being emitted.
@@ -65,6 +67,16 @@ impl<'src> Lexer<'src> {
         }
 
         loop {
+            // At the start of a line: skip blank and comment-only lines
+            // Then measure indentation and queue Indent, Dedent, or an error.
+            if self.at_line_start {
+                self.begin_line();
+
+                if let Some(item) = self.pending.pop_front() {
+                    return item;
+                }
+            }
+
             match self.cursor.peek() {
                 // Ignore horizontal whitespace for this initial stage.
                 Some(' ' | '\t') => {
@@ -153,9 +165,8 @@ impl<'src> Lexer<'src> {
         }
     }
 
-    fn scan_newline(&mut self) -> Token {
-        let start = self.cursor.position();
-
+    // Consumes one line break (`\n`, `\r`, or `\r\n`) without producing a token.
+    fn consume_newline(&mut self) {
         match self.cursor.peek() {
             Some('\r') => {
                 self.cursor.advanced();
@@ -171,12 +182,116 @@ impl<'src> Lexer<'src> {
 
             _ => unreachable!("Expected newline character"),
         }
+    }
+
+    // Scans the line break that ends a logical line and produces a Newline token.
+    fn scan_newline(&mut self) -> Token {
+        let start = self.cursor.position();
+
+        self.consume_newline();
 
         let end = self.cursor.position();
 
         self.at_line_start = true;
 
         self.make_token(TokenKind::Newline, start, end)
+    }
+
+    // Handles the start of a physical line.
+    fn begin_line(&mut self) {
+        loop {
+            let whitespace_start = self.cursor.position();
+
+            while matches!(self.cursor.peek(), Some(' ' | '\t')) {
+                self.cursor.advanced();
+            }
+
+            let whitespace_end = self.cursor.position();
+
+            match self.cursor.peek() {
+                // Whitespace-only last line.
+                None => return,
+
+                // Blank line.
+                Some('\n' | '\r') => self.consume_newline(),
+
+                // Comment-only line. The line break (or end of source) is handled
+                // on the next iteration, which then sees an empty line.
+                Some('#') => self.skip_comment(),
+
+                // A line with code.
+                Some(_) => {
+                    self.start_content_line(whitespace_start, whitespace_end);
+                    return;
+                }
+            }
+        }
+    }
+
+    // Compares the indentation of a line with code to the open indentation levels.
+    fn start_content_line(&mut self, whitespace_start: Position, whitespace_end: Position) {
+        self.at_line_start = false;
+
+        // Indentation characters are ASCII, so bytes and characters coincide.
+        let width = whitespace_end.offset - whitespace_start.offset;
+        let span = Span::new(whitespace_start, whitespace_end);
+
+        if width > 0 {
+            let whitespace = self
+                .cursor
+                .slice(whitespace_start, whitespace_end)
+                .unwrap_or("");
+            let has_tab = whitespace.contains('\t');
+            let has_space = whitespace.contains(' ');
+            let line_char = if has_tab { '\t' } else { ' ' };
+
+            let mixed = (has_tab && has_space)
+                || self
+                    .indent_char
+                    .is_some_and(|established| established != line_char);
+
+            if mixed {
+                self.pending
+                    .push_back(Err(LexerError::new(LexerErrorKind::MixedIndentation, span)));
+                return;
+            }
+
+            if self.indent_char.is_none() {
+                self.indent_char = Some(line_char);
+            }
+        }
+
+        let current = *self
+            .indentation_stack
+            .last()
+            .expect("the indentation stack always contains level 0");
+
+        if width > current {
+            self.indentation_stack.push(width);
+
+            let indent = self.make_token(TokenKind::Indent, whitespace_start, whitespace_end);
+
+            self.pending.push_back(Ok(indent));
+        } else if width < current {
+            while self
+                .indentation_stack
+                .last()
+                .is_some_and(|&level| level > width)
+            {
+                self.indentation_stack.pop();
+
+                let dedent = self.make_empty_token(TokenKind::Dedent);
+
+                self.pending.push_back(Ok(dedent));
+            }
+
+            if self.indentation_stack.last() != Some(&width) {
+                self.pending.push_back(Err(LexerError::new(
+                    LexerErrorKind::InvalidIndentation,
+                    span,
+                )));
+            }
+        }
     }
 
     fn skip_comment(&mut self) {
@@ -505,14 +620,27 @@ impl<'src> Lexer<'src> {
     }
 
     fn finish_eof(&mut self) -> Token {
-        if self.indentation_stack.len() > 1 {
+        if !self.at_line_start {
+            self.at_line_start = true;
+
+            let newline = self.make_empty_token(TokenKind::Newline);
+
+            self.pending.push_back(Ok(newline));
+        }
+
+        while self.indentation_stack.len() > 1 {
             self.indentation_stack.pop();
 
-            return self.make_empty_token(TokenKind::Dedent);
+            let dedent = self.make_empty_token(TokenKind::Dedent);
+
+            self.pending.push_back(Ok(dedent));
         }
 
         self.eof_emitted = true;
 
-        self.make_empty_token(TokenKind::Eof)
+        match self.pending.pop_front() {
+            Some(Ok(token)) => token,
+            _ => self.make_empty_token(TokenKind::Eof),
+        }
     }
 }
