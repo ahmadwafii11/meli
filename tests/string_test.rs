@@ -18,6 +18,12 @@ fn lex(source: &str) -> Vec<(TokenKind, String)> {
             break;
         }
 
+        // The Newline that closes a last line without a line break has an empty
+        // lexeme. These tests are not about it; indentation_test.rs covers it.
+        if token.kind == TokenKind::Newline && token.lexeme.is_empty() {
+            continue;
+        }
+
         tokens.push((token.kind, token.lexeme));
     }
 
@@ -36,6 +42,7 @@ fn results(source: &str) -> Vec<Result<TokenKind, LexerErrorKind>> {
     for _ in 0..1000 {
         match lexer.next_token() {
             Ok(token) if token.kind == TokenKind::Eof => return output,
+            Ok(token) if token.kind == TokenKind::Newline && token.lexeme.is_empty() => {} // Skip the synthetic end-of-file Newline (empty lexeme), as in `lex`.
             Ok(token) => output.push(Ok(token.kind)),
             Err(error) => output.push(Err(error.kind)),
         }
@@ -285,8 +292,9 @@ fn test_token_position_after_multibyte_string() {
 fn test_string_position_on_second_line() {
     let mut lexer = Lexer::new("a\n  \"hi\"");
 
-    lexer.next_token().unwrap();
-    lexer.next_token().unwrap();
+    lexer.next_token().unwrap(); // Identifier
+    lexer.next_token().unwrap(); // Newline
+    assert_eq!(lexer.next_token().unwrap().kind, TokenKind::Indent);
 
     let string = lexer.next_token().unwrap();
 
@@ -526,6 +534,7 @@ fn test_eof_after_string_is_stable() {
     let mut lexer = Lexer::new("\"a\"");
 
     assert_eq!(lexer.next_token().unwrap().kind, TokenKind::StringLiteral);
+    assert_eq!(lexer.next_token().unwrap().kind, TokenKind::Newline); // A last line without a line break is closed by a synthetic Newline.
     assert_eq!(lexer.next_token().unwrap().kind, TokenKind::Eof);
     assert_eq!(lexer.next_token().unwrap().kind, TokenKind::Eof);
 }
