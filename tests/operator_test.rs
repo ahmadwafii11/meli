@@ -16,6 +16,12 @@ fn lex(source: &str) -> Vec<(TokenKind, String)> {
             break;
         }
 
+        // The Newline that closes a last line without a line break has an empty
+        // lexeme. These tests are not about it; indentation_test.rs covers it.
+        if token.kind == TokenKind::Newline && token.lexeme.is_empty() {
+            continue;
+        }
+
         tokens.push((token.kind, token.lexeme));
     }
 
@@ -303,6 +309,7 @@ fn test_symbol_position_on_second_line() {
 
     assert_eq!(lexer.next_token().unwrap().kind, TokenKind::Identifier);
     assert_eq!(lexer.next_token().unwrap().kind, TokenKind::Newline);
+    assert_eq!(lexer.next_token().unwrap().kind, TokenKind::Indent); // The two leading spaces on line 2 open an indentation level.
 
     let plus = lexer.next_token().unwrap();
 
@@ -340,6 +347,11 @@ fn test_eof_after_symbols_is_stable() {
     let mut lexer = Lexer::new("+");
 
     assert_eq!(lexer.next_token().unwrap().kind, TokenKind::Plus);
+
+    let newline = lexer.next_token().unwrap(); // A last line without a line break is closed by a synthetic Newline.
+    assert_eq!(newline.kind, TokenKind::Newline);
+    assert!(newline.lexeme.is_empty());
+
     assert_eq!(lexer.next_token().unwrap().kind, TokenKind::Eof);
     assert_eq!(lexer.next_token().unwrap().kind, TokenKind::Eof);
 }
